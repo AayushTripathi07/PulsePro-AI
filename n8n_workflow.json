@@ -1,0 +1,272 @@
+{
+  "name": "PulsePro AI Attendance & Warning System",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "attendance-upload",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "name": "Webhook - File Upload",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        250,
+        300
+      ],
+      "id": "1"
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "binaryPropertyName": "data",
+        "options": {}
+      },
+      "name": "Read Excel File",
+      "type": "n8n-nodes-base.spreadsheetFile",
+      "typeVersion": 1,
+      "position": [
+        450,
+        300
+      ],
+      "id": "2"
+    },
+    {
+      "parameters": {
+        "jsCode": "const rawData = items[0].json;\n\n// Group by Employee and Date\nconst grouped = {};\n\nfor (const row of rawData) {\n    const key = `${row['Employee ID']}_${row['Date']}`;\n    if (!grouped[key]) {\n        grouped[key] = {\n            empId: row['Employee ID'],\n            name: row['Name'],\n            date: row['Date'],\n            punches: []\n        };\n    }\n    grouped[key].punches.push({ time: row['Time'], status: row['Punch Status'] });\n}\n\nconst processed = [];\n\nfor (const key in grouped) {\n    const emp = grouped[key];\n    \n    const inPunches = emp.punches.filter(p => p.status.toUpperCase() === 'IN').map(p => p.time).sort();\n    const outPunches = emp.punches.filter(p => p.status.toUpperCase() === 'OUT').map(p => p.time).sort();\n    \n    const checkIn = inPunches.length > 0 ? inPunches[0] : null;\n    const checkOut = outPunches.length > 0 ? outPunches[outPunches.length - 1] : null;\n    \n    let lateFlag = 'NO';\n    if (checkIn) {\n        // Basic string comparison assuming HH:MM AM/PM or HH:MM format\n        // If format is 24h string \"11:15\", simple compare works.\n        const checkInHour = parseInt(checkIn.split(':')[0]);\n        const isPM = checkIn.toUpperCase().includes('PM');\n        let hour24 = checkInHour;\n        if (isPM && checkInHour !== 12) hour24 += 12;\n        if (!isPM && checkInHour === 12) hour24 = 0;\n        \n        if (hour24 >= 11) {\n            lateFlag = 'YES';\n        }\n    }\n    \n    processed.push({\n        json: {\n            'Employee ID': emp.empId,\n            'Name': emp.name,\n            'Date': emp.date,\n            'Check-In': checkIn,\n            'Check-Out': checkOut,\n            'Late Flag': lateFlag\n        }\n    });\n}\n\nreturn processed;"
+      },
+      "name": "Process Attendance Logic",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "position": [
+        650,
+        300
+      ],
+      "id": "3"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json['Late Flag'] }}",
+              "value2": "YES"
+            }
+          ]
+        }
+      },
+      "name": "Filter Late Only",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        850,
+        300
+      ],
+      "id": "4"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE monthly_late_counter SET late_count = late_count + 1 WHERE employee_id = '{{ $json[\"Employee ID\"] }}' RETURNING late_count;"
+      },
+      "name": "Update SQLite & Get Strike Count",
+      "type": "n8n-nodes-base.sqlite",
+      "typeVersion": 1,
+      "position": [
+        1050,
+        280
+      ],
+      "id": "5"
+    },
+    {
+      "parameters": {
+        "model": "gpt-4",
+        "messages": {
+          "messageValues": [
+            {
+              "content": "You are an HR assistant. Write a professional warning email for {{ $json[\"Name\"] }} who was late today. This is their strike number {{ $json[\"late_count\"] }}. \nIf strike 1: friendly reminder.\nIf strike 2: firm warning.\nIf strike 3: critical warning, mention a mandatory meeting is scheduled."
+            }
+          ]
+        }
+      },
+      "name": "OpenAI Agent Draft Email",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [
+        1250,
+        280
+      ],
+      "id": "6"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{ $json[\"late_count\"] }}",
+              "operation": "largerEqual",
+              "value2": 3
+            }
+          ]
+        }
+      },
+      "name": "Check 3rd Strike",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        1450,
+        280
+      ],
+      "id": "7"
+    },
+    {
+      "parameters": {
+        "calendar": "primary",
+        "start": "2025-07-01T17:00:00Z",
+        "end": "2025-07-01T17:30:00Z",
+        "summary": "Mandatory HR Attendance Review - {{ $json[\"Name\"] }}",
+        "attendees": [
+          "{{ $json[\"Employee ID\"] }}@company.com"
+        ]
+      },
+      "name": "Schedule Google Calendar Meeting",
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1,
+      "position": [
+        1650,
+        180
+      ],
+      "id": "8"
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json[\"Employee ID\"] }}@company.com",
+        "subject": "Attendance Warning - Strike {{ $json[\"late_count\"] }}",
+        "message": "={{ $json[\"ai_response\"] }}\n\nMeeting Link: {{ $json[\"calendar_link\"] }}"
+      },
+      "name": "Send Gmail (3rd Strike)",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 1,
+      "position": [
+        1850,
+        180
+      ],
+      "id": "9"
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json[\"Employee ID\"] }}@company.com",
+        "subject": "Attendance Warning - Strike {{ $json[\"late_count\"] }}",
+        "message": "={{ $json[\"ai_response\"] }}"
+      },
+      "name": "Send Gmail (1st/2nd Strike)",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 1,
+      "position": [
+        1650,
+        380
+      ],
+      "id": "10"
+    }
+  ],
+  "connections": {
+    "Webhook - File Upload": {
+      "main": [
+        [
+          {
+            "node": "Read Excel File",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Excel File": {
+      "main": [
+        [
+          {
+            "node": "Process Attendance Logic",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process Attendance Logic": {
+      "main": [
+        [
+          {
+            "node": "Filter Late Only",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter Late Only": {
+      "main": [
+        [
+          {
+            "node": "Update SQLite & Get Strike Count",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update SQLite & Get Strike Count": {
+      "main": [
+        [
+          {
+            "node": "OpenAI Agent Draft Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Agent Draft Email": {
+      "main": [
+        [
+          {
+            "node": "Check 3rd Strike",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check 3rd Strike": {
+      "main": [
+        [
+          {
+            "node": "Schedule Google Calendar Meeting",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send Gmail (1st/2nd Strike)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Schedule Google Calendar Meeting": {
+      "main": [
+        [
+          {
+            "node": "Send Gmail (3rd Strike)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {}
+}

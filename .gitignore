@@ -1,0 +1,37 @@
+# Environments
+dash_env/
+convert_env/
+snap_env/
+venv/
+env/
+__pycache__/
+*.pyc
+
+# OS Files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+
+# Database (ignoring to avoid bloating repo with big DB files; users should run init_db.py)
+*.db
+*.sqlite3
+
+# Large CSVs (ignoring raw data dumps)
+Attendance Muster Report*.csv
+Attendance Muster Report*.xlsx
+
+# Secrets / Environment vars
+.env
+
+# n8n specific
+.n8n/
+
+# Build and dist
+build/
+dist/
+*.egg-info/
+
+# Do not ignore the generated flat CSV so people have sample data
+!Attendance_Report_Sheet.csv
